@@ -30,11 +30,11 @@ licence() { # licence <name> <dir>...: copies the licence files found at the top
   [ -n "$files" ] || return 1
   mkdir -p "$out/licenses/$1"; cp $files "$out/licenses/$1/"
 }
-from_tarball() { # from_tarball <name> <tarball>: the licence files at the top of an upstream source tarball
+from_tarball() { # from_tarball <name> <tarball>: the licence files at the top of an upstream source tarball (or in its REUSE LICENSES/)
   local tmp; tmp=$(mktemp -d)
-  tar -tf "$2" | grep -iE '^[^/]+/(copying|licen[cs]e|notice)[^/]*$' > "$tmp/list" || true
+  tar -tf "$2" | grep -iE '^[^/]+/((copying|licen[cs]e|notice)[^/]*|LICENSES/[^/]+)$' > "$tmp/list" || true
   [ -s "$tmp/list" ] || return 1
-  (cd "$tmp" && tar -xf "$2" $(cat list)) && licence "$1" "$tmp"/*/
+  (cd "$tmp" && tar -xf "$2" $(cat list)) && licence "$1" "$tmp"/*/ "$tmp"/*/LICENSES
 }
 missing() { echo "no licence file found for $1" >&2; exit 1; }
 
