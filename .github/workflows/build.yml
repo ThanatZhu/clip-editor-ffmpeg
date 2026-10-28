@@ -1,0 +1,67 @@
+# Builds Clip Editor's LGPL ffmpeg on Windows and macOS and publishes the zips, their sha256 and the matching FFmpeg source as a release.
+# Start it from the Actions tab (Run workflow). Then pin the release in scripts/fetch-ffmpeg-lgpl.cjs of the app.
+name: Build LGPL ffmpeg
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_tag:
+        description: FFmpeg git tag
+        default: n9.0.2
+        required: true
+permissions:
+  contents: write
+env:
+  FFMPEG_TAG: ${{ inputs.ffmpeg_tag }}
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-2025, target: win64 }
+          - { runner: macos-14, target: macos-arm64 } # oldest Apple-silicon runner: Homebrew libraries need this macOS or newer
+          - { runner: macos-15-intel, target: macos-x64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git make diffutils zip
+            mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-fontconfig
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash build.sh ${{ matrix.target }}
+      - if: runner.os == 'macOS'
+        run: |
+          brew install nasm pkgconf libass fontconfig dylibbundler
+          bash build.sh ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Source and checksums
+        run: |
+          git clone --quiet --depth 1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git src
+          git -C src archive --format=tar.gz --prefix="ffmpeg-$FFMPEG_TAG/" -o "$PWD/dist/ffmpeg-$FFMPEG_TAG-source.tar.gz" HEAD
+          echo "FFmpeg commit: $(git -C src rev-parse HEAD)" > dist/SOURCE.txt
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+      - name: Release
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          gh release create "ffmpeg-$FFMPEG_TAG-${{ github.run_number }}" dist/* \
+            --title "FFmpeg $FFMPEG_TAG (LGPL) build ${{ github.run_number }}" \
+            --notes "LGPL v3 ffmpeg + ffprobe for Clip Editor, built by build.sh at $GITHUB_SHA. Each zip has LICENSE.txt, BUILD.txt (configure flags) and licenses/ for every bundled library. The matching FFmpeg source is attached."
