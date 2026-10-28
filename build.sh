@@ -25,19 +25,36 @@ make -C src install >/dev/null
 cp src/COPYING.LGPLv3 "$out/LICENSE.txt"
 cp src/COPYING.LGPLv2.1 "$out/licenses/ffmpeg-COPYING.LGPLv2.1"
 
-licence() { # licence <package> <dir with its licence files>
-  local files; files=$(find "$2" -maxdepth 1 -type f \( -iname '*licen*' -o -iname 'copying*' -o -iname 'notice*' \) 2>/dev/null || true)
-  [ -n "$files" ] || { echo "no licence file for $1 in $2" >&2; exit 1; }
+licence() { # licence <name> <dir>...: copies the licence files found at the top of the dirs; fails if there are none
+  local files; files=$(find "${@:2}" -maxdepth 1 -type f \( -iname '*licen[cs]e*' -o -iname 'copying*' -o -iname 'notice*' \) 2>/dev/null || true)
+  [ -n "$files" ] || return 1
   mkdir -p "$out/licenses/$1"; cp $files "$out/licenses/$1/"
 }
+from_tarball() { # from_tarball <name> <tarball>: the licence files at the top of an upstream source tarball
+  local tmp; tmp=$(mktemp -d)
+  tar -tf "$2" | grep -iE '^[^/]+/(copying|licen[cs]e|notice)[^/]*$' > "$tmp/list" || true
+  [ -s "$tmp/list" ] || return 1
+  (cd "$tmp" && tar -xf "$2" $(cat list)) && licence "$1" "$tmp"/*/
+}
+missing() { echo "no licence file found for $1" >&2; exit 1; }
 
 if [ "$target" = win64 ]; then
+  msys2_source() { # msys2_source <dll> <name>: licence from the MSYS2 source package (its own files, else the upstream tarball inside)
+    local full ver base tmp inner
+    full=$(pacman -Qqo "$1") ver=$(pacman -Q "$full" | cut -d' ' -f2)
+    base=$(awk '/^%BASE%/ {getline; print}' "/var/lib/pacman/local/$full-$ver/desc") tmp=$(mktemp -d)
+    curl -fsSL "https://repo.msys2.org/mingw/sources/$base-$ver.src.tar.zst" -o "$tmp/src.tar.zst" || return 1
+    tar --zstd -xf "$tmp/src.tar.zst" -C "$tmp" || return 1
+    licence "$2" "$tmp/$base" && return 0
+    for inner in "$tmp/$base"/*.tar.*; do from_tarball "$2" "$inner" && return 0; done
+    return 1
+  }
   cp "$prefix"/bin/ffmpeg.exe "$prefix"/bin/ffprobe.exe "$prefix"/bin/*.dll "$out/"
   # the MSYS2 DLLs ffmpeg loads (ldd lists Windows' own DLLs too; those stay out)
   for dll in $(ldd "$out"/*.exe "$out"/*.dll | awk '$3 ~ /^\/ucrt64\// {print $3}' | sort -u); do
     cp "$dll" "$out/"
     pkg=$(pacman -Qqo "$dll"); pkg=${pkg#mingw-w64-ucrt-x86_64-}
-    [ -d "$out/licenses/$pkg" ] || licence "$pkg" "/ucrt64/share/licenses/$pkg"
+    [ -d "$out/licenses/$pkg" ] || licence "$pkg" "/ucrt64/share/licenses/$pkg" "/ucrt64/share/doc/$pkg" || msys2_source "$dll" "$pkg" || missing "$pkg"
   done
 else
   brew=$(brew --prefix)
@@ -50,7 +67,7 @@ else
       case $seen in *" $dep "*) continue ;; esac
       seen="$seen$dep " todo+=("$dep")
       keg=$(echo "$dep" | sed -E 's#.*/(opt|Cellar)/([^/]+)/.*#\2#')
-      [ -d "$out/licenses/$keg" ] || licence "$keg" "$brew/opt/$keg"
+      [ -d "$out/licenses/$keg" ] || licence "$keg" "$brew/opt/$keg" "$brew/opt/$keg/share/doc/$keg"         || { brew fetch -q --build-from-source --formula "$keg" >/dev/null && from_tarball "$keg" "$(brew --cache --build-from-source --formula "$keg")"; }         || missing "$keg"
     done
   done
   # copy ffmpeg's own and Homebrew's dylibs next to the programs and point them at @executable_path/lib

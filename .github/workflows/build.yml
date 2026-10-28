@@ -30,7 +30,7 @@ jobs:
           msystem: UCRT64
           update: true
           install: >-
-            git make diffutils zip
+            git make diffutils zip zstd
             mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-fontconfig
       - if: runner.os == 'Windows'
